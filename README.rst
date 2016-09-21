@@ -44,7 +44,7 @@ This package requires `NumPy <http://www.numpy.org/>`__ and `astropy
 <http://www.scipy.org/>`__ and the `apogee
 <https://github.com/jobovy/apogee>`__ package. 
 
-This package requires 'fitsio <https://github.com/esheldon/fitsio>'
+This package requires `fitsio <https://github.com/esheldon/fitsio>`
 
 This package should work in both python 2 and 3. 
 
