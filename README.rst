@@ -15,6 +15,8 @@ AUTHORS
  * Jo Bovy - bovy at astro dot utoronto dot ca
  * You!
 
+Modified by Andrés Jordán eliminating some functionalities so that it is easier to install for students of my course (Astrofísica Experimental)
+
 ACKNOWLEDGING USE OF THIS CODE
 ==============================
 
@@ -42,9 +44,9 @@ This package requires `NumPy <http://www.numpy.org/>`__ and `astropy
 <http://www.scipy.org/>`__ and the `apogee
 <https://github.com/jobovy/apogee>`__ package. 
 
-This package should work in both python 2 and 3. Please open an `issue
-<https://github.com/jobovy/gaia_tools/issues>`__ if you find a part of the
-code that does not support python 3.
+This package requires 'fitsio <https://github.com/esheldon/fitsio>'
+
+This package should work in both python 2 and 3. 
 
 DATA FILES AND ENVIRONMENT VARIABLES
 =====================================
@@ -52,9 +54,7 @@ DATA FILES AND ENVIRONMENT VARIABLES
 This code will download and store various data files. The top-level
 location of where these are stored is set by the **GAIA_TOOLS_DATA**
 environment variable, which is the path of the top-level directory
-under which the data will be stored. To use the `apogee
-<https://github.com/jobovy/apogee>`__ functionality, you also need to
-set the environment variables appropriate for that package.
+under which the data will be stored. 
 
 BASIC USE
 ==========
@@ -77,12 +77,6 @@ survey's DR1, do::
 
     galah_cat= gload.galah()
 
-Through an interface to the more detailed `apogee
-<https://github.com/jobovy/apogee>`__ package, you can also load
-various APOGEE data files, for example::
-
-	apogee_cat= gload.apogee()
-	rc_cat= gload.apogeerc()
 
 Similarly, you can load the `RAVE
 <https://www.rave-survey.org/project/>`__ and `RAVE-on
@@ -138,10 +132,9 @@ API
 (May or may not be fully up-to-date)
 
  * ``gaia_tools.load``
-     * ``gaia_tools.load.apogee``
-     * ``gaia_tools.load.apogeerc``
      * ``gaia_tools.load.galah``
      * ``gaia_tools.load.rave``
+     * ``gaia_tools.load.raveon``
          * ``gaia_tools.load.download.vizier``
  * ``gaia_tools.xmatch``
      * ``gaia_tools.xmatch.xmatch``
