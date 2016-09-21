@@ -20,8 +20,7 @@ Modified by Andrés Jordán eliminating some functionalities so that it is easie
 ACKNOWLEDGING USE OF THIS CODE
 ==============================
 
-Please refer back to this repository when using this code in your
-work.
+Please refer back to the original repository by Jo Bovy when using this code.
 
 INSTALLATION
 ============
