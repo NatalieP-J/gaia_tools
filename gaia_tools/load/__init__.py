@@ -1,4 +1,5 @@
 import os, os.path
+import warnings
 import numpy
 import numpy.lib.recfunctions
 import astropy.io.ascii
@@ -14,6 +15,11 @@ def apogee(**kwargs):
     PURPOSE:
        read the APOGEE allStar file
     INPUT:
+       IF the apogee package is not installed:
+           dr= (13) SDSS data release
+
+       ELSE you can use the same keywords as apogee.tools.read.allstar:
+
        rmcommissioning= (default: True) if True, only use data obtained after commissioning
        main= (default: False) if True, only select stars in the main survey
        exclude_star_bad= (False) if True, remove stars with the STAR_BAD flag set in ASPCAPFLAG
@@ -31,8 +37,14 @@ def apogee(**kwargs):
        2013-09-06 - Written - Bovy (IAS)
     """
     if not _APOGEE_LOADED:
-        raise ImportError("Loading the APOGEE data requires the jobovy/apogee module to be installed")
-    return apread.allStar(**kwargs)
+        warnings.warn("Falling back on simple APOGEE interface; for more functionality, install the jobovy/apogee package")
+        dr= kwargs.get('dr',13)
+        filePath= path.apogeePath(dr=dr)
+        if not os.path.exists(filePath):
+            download.apogee(dr=dr)
+        return fitsio.read(filePath,1)
+    else:
+        return apread.allStar(**kwargs)
 
 def apogeerc(**kwargs):
     """
@@ -41,6 +53,11 @@ def apogeerc(**kwargs):
     PURPOSE:
        read the APOGEE RC data
     INPUT:
+       IF the apogee package is not installed:
+           dr= (13) SDSS data release
+
+       ELSE you can use the same keywords as apogee.tools.read.rcsample:
+
        main= (default: False) if True, only select stars in the main survey
        dr= data reduction to load the catalog for (automatically set based on APOGEE_REDUX if not given explicitly)
     OUTPUT:
@@ -49,8 +66,14 @@ def apogeerc(**kwargs):
        2013-10-08 - Written - Bovy (IAS)
     """
     if not _APOGEE_LOADED:
-        raise ImportError("Loading the APOGEE RC data requires the jobovy/apogee module to be installed")
-    return apread.rcsample(**kwargs)
+        warnings.warn("Falling back on simple APOGEE interface; for more functionality, install the jobovy/apogee package")
+        dr= kwargs.get('dr',13)
+        filePath= path.apogeercPath(dr=dr)
+        if not os.path.exists(filePath):
+            download.apogeerc(dr=dr)
+        return fitsio.read(filePath,1)
+    else:
+        return apread.rcsample(**kwargs)
   
 def galah(dr=1):
     """
@@ -73,7 +96,27 @@ def galah(dr=1):
     data['dec']._fill_value= numpy.array([-9999.99])
     return data
 
-def rave(dr=5):
+def lamost(dr=2,cat='all'):
+    """
+    NAME:
+       lamost
+    PURPOSE:
+       Load the LAMOST data
+    INPUT:
+       dr= (2) data release
+       cat= ('all') 'all', 'A', 'M', 'star' (see LAMOST docs)
+    OUTPUT:
+       data table
+    HISTORY:
+       2016-10-13 - Written - Bovy (UofT)
+    """
+    filePath= path.lamostPath(dr=dr,cat=cat)
+    if not os.path.exists(filePath):
+        download.lamost(dr=dr,cat=cat)
+    data= fitsio.read(filePath,1)
+    return data
+
+def rave(dr=5, usecols=None):
     """
     NAME:
        rave
@@ -81,6 +124,7 @@ def rave(dr=5):
        Load the RAVE data
     INPUT:
        dr= (5) data release
+       usecols= (sequence, optional) indices to read from RAVE data
     OUTPUT:
        data table
     HISTORY:
@@ -92,7 +136,10 @@ def rave(dr=5):
     if dr == 4:
         data= astropy.io.ascii.read(filePath,readme=ReadMePath)
     elif dr == 5:
-        data= numpy.genfromtxt(filePath,delimiter=',',names=True)
+        if usecols:
+            data= numpy.genfromtxt(filePath,delimiter=',', names=True, usecols=usecols)
+        else:
+            data= numpy.genfromtxt(filePath,delimiter=',', names=True)
     return data
 
 def raveon(dr=5):

@@ -12,6 +12,27 @@ import subprocess
 from gaia_tools.load import path
 _MAX_NTRIES= 2
 _ERASESTR= "                                                                                "
+def apogee(dr=13,verbose=True,spider=False):
+    filePath= path.apogeePath(dr=dr)
+    if os.path.exists(filePath): return None
+    if dr == 12:
+        _download_file(\
+            'http://data.sdss3.org/sas/dr12/apogee/spectro/redux/r5/allStar-v603.fits',
+            filePath,verbose=verbose,spider=spider)
+    elif dr == 13:
+        _download_file(\
+            'https://data.sdss.org/sas/dr13/apogee/spectro/redux/r6/allStar-l30e.2.fits',
+            filePath,verbose=verbose,spider=spider)
+    return None    
+    
+def apogeerc(dr=13,verbose=True,spider=False):
+    filePath= path.apogeercPath(dr=dr)
+    if os.path.exists(filePath): return None
+    _download_file(\
+        'https://data.sdss.org/sas/dr%i/apogee/vac/apogee-rc/cat/apogee-rc-DR%i.fits' % (dr,dr),
+        filePath,verbose=verbose,spider=spider)
+    return None    
+    
 def galah(dr=1,verbose=True,spider=False):
     filePath, ReadMePath= path.galahPath(dr=dr)
     if os.path.exists(filePath): return None
@@ -24,9 +45,24 @@ def galah(dr=1,verbose=True,spider=False):
             ReadMePath,verbose=verbose,spider=spider)
     return None    
     
+def lamost(dr=2,cat='all',verbose=True):
+    filePath= path.lamostPath(dr=dr,cat=cat)
+    if os.path.exists(filePath): return None
+    downloadPath= filePath.replace(
+        filePath,
+        'http://dr2.lamost.org/catdl?name=%s' % os.path.basename(filePath))
+    _download_file(downloadPath+'.gz',filePath+'.gz',verbose=verbose)
+    # gunzip the file
+    try:
+        subprocess.check_call(['gunzip',
+                               filePath+'.gz'])
+    except subprocess.CalledProcessError:
+        raise IOError('gunzipping the LAMOST catalog %s failed ...' % os.path.basename(filePath))
+    return None    
+
 def rave(dr=5,verbose=True):
     filePath, ReadMePath= path.ravePath(dr=dr)
-    #if os.path.exists(filePath): return None
+    if os.path.exists(filePath): return None
     if dr == 4:
         vizier('III/272',filePath,ReadMePath,
                catalogname='ravedr4.dat',readmename='ReadMe')
@@ -56,7 +92,7 @@ def tgas(dr=1,verbose=True):
     filePaths= path.tgasPath(dr=dr)
     for filePath in filePaths:
         if os.path.exists(filePath): continue
-        downloadPath= filePath.replace(path._GAIA_TOOLS_DATA,
+        downloadPath= filePath.replace(path._GAIA_TOOLS_DATA.rstrip('/'),
                                        'http://cdn.gea.esac.esa.int')
         _download_file(downloadPath,filePath,verbose=verbose)
     return None    

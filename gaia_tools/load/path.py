@@ -1,8 +1,31 @@
 import os, os.path
 _GAIA_TOOLS_DATA= os.getenv('GAIA_TOOLS_DATA')
+def apogeePath(dr=13):
+    if dr == 12:
+        return os.path.join(_GAIA_TOOLS_DATA,'apogee','DR%i' % dr,
+                            'allStar-v603.fits')
+    elif dr == 13:
+        return os.path.join(_GAIA_TOOLS_DATA,'apogee','DR%i' % dr,
+                            'allStar-l30e.2.fits')
+
+def apogeercPath(dr=13):
+    return os.path.join(_GAIA_TOOLS_DATA,'apogee','DR%i' % dr,
+                        'apogee-rc-DR%i.fits' % dr)
+
 def galahPath(dr=1):
     return (os.path.join(_GAIA_TOOLS_DATA,'galah','DR%i' % dr,'catalog.dat'),
             os.path.join(_GAIA_TOOLS_DATA,'galah','DR%i' % dr,'ReadMe'))
+
+def lamostPath(dr=2,cat='all'):
+    if cat.lower() == 'all':
+        filename= 'dr2.fits'
+    elif cat.lower() == 'a':
+        filename= 'dr2_a_stellar.fits'
+    elif cat.lower() == 'm':
+        filename= 'dr2_m_stellar.fits'
+    elif cat.lower() == 'star' or cat.lower() == 'stars':
+        filename= 'dr2_stellar.fits'
+    return os.path.join(_GAIA_TOOLS_DATA,'lamost','DR%i' % dr,filename)
 
 def ravePath(dr=5):
     if dr == 4:
