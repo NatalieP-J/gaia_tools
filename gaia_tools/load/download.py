@@ -9,10 +9,20 @@ import shutil
 import tempfile
 from ftplib import FTP
 import subprocess
+from astropy.io import ascii
 from gaia_tools.load import path
 _MAX_NTRIES= 2
 _ERASESTR= "                                                                                "
-def apogee(dr=13,verbose=True,spider=False):
+def twomass(dr='tgas',verbose=True,spider=False):
+    filePath= path.twomassPath(dr=dr)
+    if os.path.exists(filePath): return None
+    if dr == 'tgas':
+        _download_file(\
+            'http://portal.nersc.gov/project/cosmo/temp/dstn/gaia/tgas-matched-2mass.fits.gz',
+            filePath,verbose=verbose,spider=spider)
+    return None    
+    
+def apogee(dr=14,verbose=True,spider=False):
     filePath= path.apogeePath(dr=dr)
     if os.path.exists(filePath): return None
     if dr == 12:
@@ -23,9 +33,13 @@ def apogee(dr=13,verbose=True,spider=False):
         _download_file(\
             'https://data.sdss.org/sas/dr13/apogee/spectro/redux/r6/allStar-l30e.2.fits',
             filePath,verbose=verbose,spider=spider)
+    elif dr == 14:
+        _download_file(\
+            'https://data.sdss.org/sas/dr14/apogee/spectro/redux/r8/stars/l31c/l31c.2/allStar-l31c.2.fits',
+            filePath,verbose=verbose,spider=spider)
     return None    
     
-def apogeerc(dr=13,verbose=True,spider=False):
+def apogeerc(dr=14,verbose=True,spider=False):
     filePath= path.apogeercPath(dr=dr)
     if os.path.exists(filePath): return None
     _download_file(\
@@ -33,8 +47,11 @@ def apogeerc(dr=13,verbose=True,spider=False):
         filePath,verbose=verbose,spider=spider)
     return None    
     
-def galah(dr=1,verbose=True,spider=False):
-    filePath, ReadMePath= path.galahPath(dr=dr)
+def galah(dr=2,verbose=True,spider=False):
+    if dr == 1 or dr == '1':
+        filePath, ReadMePath= path.galahPath(dr=dr)
+    else:
+        filePath= path.galahPath(dr=dr)
     if os.path.exists(filePath): return None
     if dr == 1:
         _download_file(\
@@ -43,6 +60,14 @@ def galah(dr=1,verbose=True,spider=False):
         _download_file(\
             'https://cloudstor.aarnet.edu.au/plus/index.php/s/OMc9QWGG1koAK2D/download?path=%2F&files=ReadMe',
             ReadMePath,verbose=verbose,spider=spider)
+    elif dr == 2 or dr == '2' or dr == 2.1 or dr == '2.1':
+        # GALAH updated catalog May 10 2018; remove catalog downloaded before
+        if os.path.exists(filePath.replace('DR2.1','DR2')):
+            os.remove(filePath.replace('DR2.1','DR2'))
+        _download_file(\
+          os.path.join('https://datacentral.aao.gov.au/teamdata/GALAH/public/',
+                       os.path.basename(filePath)),
+            filePath,verbose=verbose,spider=spider)
     return None    
     
 def lamost(dr=2,cat='all',verbose=True):
@@ -90,14 +115,39 @@ def raveon(dr=5,verbose=True,spider=False):
     
 def tgas(dr=1,verbose=True):
     filePaths= path.tgasPath(dr=dr)
-    for filePath in filePaths:
+    old_filePaths= path.tgasPath(dr=dr,old=True)
+    for filePath, old_filePath in zip(filePaths,old_filePaths):
         if os.path.exists(filePath): continue
+        # after DR1, Gaia archive changed URL to include 'gdr1', which we 
+        # now mirror locally, so check whether the file exists in the old 
+        # location and mv if necessary
+        if os.path.exists(old_filePath):
+            try:
+                # make all intermediate directories
+                os.makedirs(os.path.dirname(filePath))
+            except OSError: pass
+            shutil.move(old_filePath,filePath)
+            continue
         downloadPath= filePath.replace(path._GAIA_TOOLS_DATA.rstrip('/'),
                                        'http://cdn.gea.esac.esa.int')
         _download_file(downloadPath,filePath,verbose=verbose)
     return None    
     
-
+def gaiarv(dr=2,verbose=True):
+    filePaths= path.gaiarvPath(dr=dr,format='fits')
+    csvFilePaths= path.gaiarvPath(dr=dr,format='csv')
+    for filePath, csvFilePath in zip(filePaths,csvFilePaths):
+        if os.path.exists(filePath): continue
+        try:
+            os.makedirs(os.path.dirname(filePath)) 
+        except OSError: pass
+        downloadPath= csvFilePath.replace(path._GAIA_TOOLS_DATA.rstrip('/'),
+                                       'http://cdn.gea.esac.esa.int')
+        _download_file(downloadPath,csvFilePath,verbose=verbose)
+        data= ascii.read(csvFilePath,format='csv')
+        data.write(filePath,format='fits')
+    return None    
+    
 def vizier(cat,filePath,ReadMePath,
            catalogname='catalog.dat',readmename='ReadMe'):
     """
@@ -155,6 +205,11 @@ def _download_file(downloadPath,filePath,verbose=False,spider=False):
             elif not 'exit status 4' in str(e):
                 interrupted= True
             os.remove(tmp_savefilename)
+        except OSError as e:
+            if e.errno == os.errno.ENOENT:
+                raise OSError("Automagically downloading catalogs requires the wget program; please install wget and try again...")
+            else:
+                raise
         finally:
             if os.path.exists(tmp_savefilename):
                 os.remove(tmp_savefilename)

@@ -1,22 +1,49 @@
 import os, os.path
 import warnings
+import pickle
 import numpy
 import numpy.lib.recfunctions
 import astropy.io.ascii
-import fitsio
+try:
+    import fitsio
+    fitsread= fitsio.read
+except ImportError:
+    import astropy.io.fits as pyfits
+    fitsread= pyfits.getdata
 _APOGEE_LOADED= True
 try:
     import apogee.tools.read as apread
-except ImportError:
+except (ImportError,RuntimeError): # RuntimeError if apogee env. not setup
     _APOGEE_LOADED= False
 from gaia_tools.load import path, download
-def apogee(**kwargs):
+from gaia_tools.util import save_pickles
+def twomass(dr='tgas'):
+    """
+    NAME:
+       twomass
+    PURPOSE:
+       Load the 2MASS data matched to TGAS data
+    INPUT:
+       dr= ('tgas') data release
+    OUTPUT:
+       data table
+    HISTORY:
+       2017-01-17 - Written - Bovy (UofT/CCA)
+    """
+    if not dr.lower() == 'tgas':
+        raise ValueError('Only the 2MASS data matched to TGAS is available currently')
+    filePath= path.twomassPath(dr=dr)
+    if not os.path.exists(filePath):
+        download.twomass(dr=dr)
+    return fitsread(filePath,1)
+
+def apogee(xmatch=None,**kwargs):
     """
     PURPOSE:
        read the APOGEE allStar file
     INPUT:
        IF the apogee package is not installed:
-           dr= (13) SDSS data release
+           dr= (14) SDSS data release
 
        ELSE you can use the same keywords as apogee.tools.read.allstar:
 
@@ -31,22 +58,34 @@ def apogee(**kwargs):
        distredux= (default: DR default) reduction on which the distances are based
        rmdups= (False) if True, remove duplicates (very slow)
        raw= (False) if True, just return the raw file, read w/ fitsio
+    
+       ALWAYS ALSO
+
+       xmatch= (None) if set, cross-match against a Vizier catalog (e.g., vizier:I/345/gaia2 for Gaia DR2) using gaia_tools.xmatch.cds and return the overlap
+       +gaia_tools.xmatch.cds keywords
     OUTPUT:
-       allStar data
+       allStar data[,xmatched table]
     HISTORY:
        2013-09-06 - Written - Bovy (IAS)
+       2018-05-09 - Add xmatch - Bovy (UofT)
     """
     if not _APOGEE_LOADED:
         warnings.warn("Falling back on simple APOGEE interface; for more functionality, install the jobovy/apogee package")
-        dr= kwargs.get('dr',13)
+        dr= kwargs.get('dr',14)
         filePath= path.apogeePath(dr=dr)
         if not os.path.exists(filePath):
             download.apogee(dr=dr)
-        return fitsio.read(filePath,1)
+        data= fitsread(filePath,1)
+        if not xmatch is None:
+            ma,mai= _xmatch_cds(data,xmatch,filePath,**kwargs)
+            return (data[mai],ma)
+        else:
+            return data
     else:
+        kwargs['xmatch']= xmatch
         return apread.allStar(**kwargs)
 
-def apogeerc(**kwargs):
+def apogeerc(xmatch=None,**kwargs):
     """
     NAME:
        apogeerc
@@ -54,47 +93,99 @@ def apogeerc(**kwargs):
        read the APOGEE RC data
     INPUT:
        IF the apogee package is not installed:
-           dr= (13) SDSS data release
+           dr= (14) SDSS data release
 
        ELSE you can use the same keywords as apogee.tools.read.rcsample:
 
        main= (default: False) if True, only select stars in the main survey
        dr= data reduction to load the catalog for (automatically set based on APOGEE_REDUX if not given explicitly)
+
+       ALWAYS ALSO
+
+       xmatch= (None) if set, cross-match against a Vizier catalog (e.g., vizier:I/345/gaia2 for Gaia DR2) using gaia_tools.xmatch.cds and return the overlap
+       +gaia_tools.xmatch.cds keywords
     OUTPUT:
-       APOGEE RC sample data
+       APOGEE RC sample data[,xmatched table]
     HISTORY:
        2013-10-08 - Written - Bovy (IAS)
+       2018-05-09 - Add xmatch - Bovy (UofT)
     """
     if not _APOGEE_LOADED:
         warnings.warn("Falling back on simple APOGEE interface; for more functionality, install the jobovy/apogee package")
-        dr= kwargs.get('dr',13)
+        dr= kwargs.get('dr',14)
         filePath= path.apogeercPath(dr=dr)
         if not os.path.exists(filePath):
             download.apogeerc(dr=dr)
-        return fitsio.read(filePath,1)
+        data= fitsread(filePath,1)
+        if not xmatch is None:
+            ma,mai= _xmatch_cds(data,xmatch,filePath,**kwargs)
+            return (data[mai],ma)
+        else:
+            return data
     else:
+        kwargs['xmatch']= xmatch
         return apread.rcsample(**kwargs)
   
-def galah(dr=1):
+def gaiarv(dr=2):
+    """
+    NAME:
+       gaiarv
+    PURPOSE:
+       Load the RV subset of the Gaia data
+    INPUT:
+       dr= (2) data release
+    OUTPUT:
+       data table
+    HISTORY:
+       2018-04-25 - Written for DR2 - Bovy (UofT)
+    """
+    filePaths= path.gaiarvPath(dr=dr,format='fits')
+    if not numpy.all([os.path.exists(filePath) for filePath in filePaths]):
+        download.gaiarv(dr=dr)
+    return numpy.lib.recfunctions.stack_arrays(\
+        [fitsread(filePath,ext=1) for filePath in filePaths],
+        autoconvert=True)
+
+def galah(dr=2,xmatch=None,**kwargs):
     """
     NAME:
        galah
     PURPOSE:
        Load the GALAH data
     INPUT:
-       dr= (1) data release
+       dr= (2) data release
+       xmatch= (None) if set, cross-match against a Vizier catalog (e.g., vizier:I/345/gaia2 for Gaia DR2) using gaia_tools.xmatch.cds and return the overlap
+       +gaia_tools.xmatch.cds keywords
     OUTPUT:
-       data table
+       data table[,xmatched table]
     HISTORY:
        2016-09-12 - Written - Bovy (UofT)
+       2018-04-19 - Updated for DR2 - Bovy (UofT)
+       2018-05-08 - Add xmatch - Bovy (UofT)
     """
-    filePath, ReadMePath= path.galahPath(dr=dr)
+    if dr == 1 or dr == '1':
+        filePath, ReadMePath= path.galahPath(dr=dr)
+    else:
+        filePath= path.galahPath(dr=dr)
     if not os.path.exists(filePath):
         download.galah(dr=dr)
-    data= astropy.io.ascii.read(filePath,readme=ReadMePath)
-    data['RA']._fill_value= numpy.array([-9999.99])
-    data['dec']._fill_value= numpy.array([-9999.99])
-    return data
+    if dr == 1  or dr == '1':
+        data= astropy.io.ascii.read(filePath,readme=ReadMePath)
+        data['RA']._fill_value= numpy.array([-9999.99])
+        data['dec']._fill_value= numpy.array([-9999.99])
+    else:
+        data= fitsread(filePath,1)
+    if not xmatch is None:
+        if dr == 1  or dr == '1':
+            kwargs['colRA']= kwargs.get('colRA','RA')
+            kwargs['colDec']= kwargs.get('colDec','dec')
+        else:
+            kwargs['colRA']= kwargs.pop('colRA','raj2000')
+            kwargs['colDec']= kwargs.pop('colDec','dej2000')
+        ma,mai= _xmatch_cds(data,xmatch,filePath,**kwargs)
+        return (data[mai],ma)
+    else:
+        return data
 
 def lamost(dr=2,cat='all'):
     """
@@ -113,7 +204,7 @@ def lamost(dr=2,cat='all'):
     filePath= path.lamostPath(dr=dr,cat=cat)
     if not os.path.exists(filePath):
         download.lamost(dr=dr,cat=cat)
-    data= fitsio.read(filePath,1)
+    data= fitsread(filePath,1)
     return data
 
 def rave(dr=5, usecols=None):
@@ -158,7 +249,7 @@ def raveon(dr=5):
     filePath= path.raveonPath(dr=dr)
     if not os.path.exists(filePath):
         download.raveon(dr=dr)
-    data= fitsio.read(filePath,1)
+    data= fitsread(filePath,1)
     return data
 
 def tgas(dr=1):
@@ -178,7 +269,27 @@ def tgas(dr=1):
     if not numpy.all([os.path.exists(filePath) for filePath in filePaths]):
         download.tgas(dr=dr)
     return numpy.lib.recfunctions.stack_arrays(\
-        [fitsio.read(filePath,ext=1) for filePath in filePaths],
+        [fitsread(filePath,ext=1) for filePath in filePaths],
         autoconvert=True)
 
+def _xmatch_cds(data,xcat,filePath,**kwargs):
+    if xcat.lower() == 'gaiadr2' or xcat.lower() == 'gaia2':
+        xcat= 'vizier:I/345/gaia2'
+    maxdist= kwargs.pop('maxdist',2.)
+    # Check whether the cached x-match exists
+    xmatch_filename= xmatch_cache_filename(filePath,xcat,maxdist)
+    if os.path.exists(xmatch_filename):
+        with open(xmatch_filename,'rb') as savefile:
+            ma= pickle.load(savefile)
+            mai= pickle.load(savefile)
+    else:
+        from gaia_tools.xmatch import cds
+        ma,mai= cds(data,xcat=xcat,maxdist=maxdist,**kwargs)
+        save_pickles(xmatch_filename,ma,mai)
+    return (ma,mai)
+
+def xmatch_cache_filename(filePath,xcat,maxdist):
+    filename,fileExt= os.path.splitext(filePath)
+    cachePath= filename+'_xmatch_{}_maxdist_{:.2f}'.format(xcat.replace('/','_').replace(':','_'),maxdist)+'.pkl'
+    return cachePath
     

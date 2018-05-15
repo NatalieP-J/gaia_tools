@@ -7,6 +7,7 @@ import warnings
 import subprocess
 import numpy
 import astropy.coordinates as acoords
+from astropy.table import Table
 from astropy import units as u
 
 def xmatch(cat1,cat2,maxdist=2,
@@ -71,9 +72,9 @@ def xmatch(cat1,cat2,maxdist=2,
     else:
         return (m1,m2,d2d[mindx])
 
-def cds(cat,xcat='vizier:Tycho2',maxdist=2,colRA='RA',colDec='DEC',
-        epoch=2000.,colpmRA='pmra',colpmDec='pmdec',
-        savefilename=None):
+def cds(cat,xcat='vizier:I/345/gaia2',maxdist=2,colRA='RA',colDec='DEC',
+        selection='best',epoch=2000.,colpmRA='pmra',colpmDec='pmdec',
+        savefilename=None,gaia_all_columns=False):
     """
     NAME:
        cds
@@ -81,13 +82,15 @@ def cds(cat,xcat='vizier:Tycho2',maxdist=2,colRA='RA',colDec='DEC',
        Cross-match against a catalog in the CDS archive using the CDS cross-matching service (http://cdsxmatch.u-strasbg.fr/xmatch); uses the curl interface
     INPUT:
        cat - a catalog to cross match, requires 'RA' and 'DEC' keywords (see below)
-       xcat= ('vizier:Tycho2') name of the catalog to cross-match against, in a format understood by the CDS cross-matching service (see http://cdsxmatch.u-strasbg.fr/xmatch/doc/available-tables.html)
+       xcat= ('vizier:I/345/gaia2') name of the catalog to cross-match against, in a format understood by the CDS cross-matching service (see http://cdsxmatch.u-strasbg.fr/xmatch/doc/available-tables.html; things like 'vizier:Tycho2' or 'vizier:I/345/gaia2')
        maxdist= (2) maximum distance in arcsec
        colRA= ('RA') name of the tag in cat with the right ascension
        colDec= ('DEC') name of the tag in cat with the declination
+       selection= ('best') select either all matches or the best match according to CDS (see 'selection' at http://cdsxmatch.u-strasbg.fr/xmatch/doc/API-calls.html)
        epoch= (2000.) epoch of the coordinates in cat
        colpmRA= ('pmra') name of the tag in cat with the proper motion in right ascension in degree in cat (assumed to be ICRS; includes cos(Dec)) [only used when epoch != 2000.]
        colpmDec= ('pmdec') name of the tag in cat with the proper motion in declination in degree in cat (assumed to be ICRS) [only used when epoch != 2000.]
+       gaia_all_columns= (False) set to True if you are matching against Gaia DR2 and want *all* columns returned; this runs a query at the Gaia Archive, which may or may not work...
        savefilename= (None) if set, save the output from CDS to this path; can match back using cds_matchback
     OUTPUT:
        (xcat entries for those that match,
@@ -95,6 +98,7 @@ def cds(cat,xcat='vizier:Tycho2',maxdist=2,colRA='RA',colDec='DEC',
     HISTORY:
        2016-09-12 - Written based on RC catalog code - Bovy (UofT)
        2016-09-21 - Account for Gaia epoch 2015 - Bovy (UofT)
+       2018-05-08 - Added gaia_all_columns - Bovy (UofT)
     """
     if 'ref_epoch' in cat.dtype.fields and numpy.fabs(epoch-2015.) > 0.01:
         warnings.warn("You appear to be using a Gaia catalog, but are not setting the epoch to 2015., which may lead to incorrect matches")
@@ -105,8 +109,11 @@ def cds(cat,xcat='vizier:Tycho2',maxdist=2,colRA='RA',colDec='DEC',
             /3600000.*depoch
         ddec= cat[colpmDec]/3600000.*depoch
     else:
-        dra= 0.
-        ddec= 0.
+        dra= numpy.zeros(len(cat))
+        ddec= numpy.zeros(len(cat))
+    if selection != 'all': selection= 'best'
+    if selection == 'all':
+        raise NotImplementedError("selection='all' CDS cross-match not currently implemented")
     # Write positions
     posfilename= tempfile.mktemp('.csv',dir=os.getcwd())
     resultfilename= tempfile.mktemp('.csv',dir=os.getcwd())
@@ -114,7 +121,8 @@ def cds(cat,xcat='vizier:Tycho2',maxdist=2,colRA='RA',colDec='DEC',
         wr= csv.writer(csvfile,delimiter=',',quoting=csv.QUOTE_MINIMAL)
         wr.writerow(['RA','DEC'])
         for ii in range(len(cat)):
-            wr.writerow([cat[ii][colRA]-dra[ii],cat[ii][colDec]]-ddec[ii])
+            wr.writerow([(cat[ii][colRA]-dra[ii]+360.) % 360.,
+                          cat[ii][colDec]]-ddec[ii])
     # Send to CDS for matching
     result= open(resultfilename,'w')
     try:
@@ -122,6 +130,7 @@ def cds(cat,xcat='vizier:Tycho2',maxdist=2,colRA='RA',colDec='DEC',
                                '-X','POST',
                                '-F','request=xmatch',
                                '-F','distMaxArcsec=%i' % maxdist,
+                               '-F','selection=%s' % selection,
                                '-F','RESPONSEFORMAT=csv',
                                '-F','cat1=@%s' % os.path.basename(posfilename),
                                '-F','colRA1=RA',
@@ -137,6 +146,29 @@ def cds(cat,xcat='vizier:Tycho2',maxdist=2,colRA='RA',colDec='DEC',
     result.close()
     # Directly match on input RA
     ma= cds_load(resultfilename)
+    if gaia_all_columns:
+        from astroquery.gaia import Gaia
+        # Write another temporary file with the XML output of the cross-match
+        tab= Table(numpy.array([ma['source_id'],ma['RA'],ma['DEC']]).T,
+                   names=('source_id','RA','DEC'),
+                   dtype=('int64','float64','float64'))
+        xmlfilename= tempfile.mktemp('.xml',dir=os.getcwd())
+        tab.write(xmlfilename,format='votable')
+        try:
+            job= Gaia.launch_job_async(
+                """select g.*, m.RA as mRA, m.DEC as mDEC
+from gaiadr2.gaia_source as g 
+inner join tap_upload.my_table as m on m.source_id = g.source_id""",
+                                       upload_resource=xmlfilename,
+                                       upload_table_name="my_table")
+            ma= job.get_results()
+        except:
+            print("gaia_tools.xmath.cds failed to retrieve all gaiadr2 columns, returning just the default returned by the CDS xMatch instead...")
+        else:
+            ma.rename_column('mra','RA')
+            ma.rename_column('mdec','DEC')
+        finally:
+            os.remove(xmlfilename)
     # Remove temporary files
     os.remove(posfilename)
     if savefilename is None:
@@ -144,14 +176,17 @@ def cds(cat,xcat='vizier:Tycho2',maxdist=2,colRA='RA',colDec='DEC',
     else:
         shutil.move(resultfilename,savefilename)
     # Match back to the original catalog
-    mai= cds_matchback(cat,ma,colRA=colRA)
+    mai= cds_matchback(cat,ma,colRA=colRA,colDec=colDec,epoch=epoch,
+                       colpmRA=colpmRA,colpmDec=colpmDec)
     return (ma,mai)
 
 def cds_load(filename):
     return numpy.genfromtxt(filename,delimiter=',',skip_header=0,
-                            filling_values=-9999.99,names=True)
+                            filling_values=-9999.99,names=True,
+                            dtype='float128')
 
-def cds_matchback(cat,xcat,colRA='RA'):
+def cds_matchback(cat,xcat,colRA='RA',colDec='DEC',selection='best',
+                  epoch=2000.,colpmRA='pmra',colpmDec='pmdec',):
     """
     NAME:
        cds_matchback
@@ -160,13 +195,38 @@ def cds_matchback(cat,xcat,colRA='RA'):
     INPUT
        cat - original catalog
        xcat - matched catalog returned by xmatch.cds
-       colRA - the column with the RA tag in cat
+       colRA= ('RA') name of the tag in cat with the right ascension
+       colDec= ('DEC') name of the tag in cat with the declination
+       selection= ('best') select either all matches or the best match according to CDS (see 'selection' at http://cdsxmatch.u-strasbg.fr/xmatch/doc/API-calls.html)
+       epoch= (2000.) epoch of the coordinates in cat
+       colpmRA= ('pmra') name of the tag in cat with the proper motion in right ascension in degree in cat (assumed to be ICRS; includes cos(Dec)) [only used when epoch != 2000.]
+       colpmDec= ('pmdec') name of the tag in cat with the proper motion in declination in degree in cat (assumed to be ICRS) [only used when epoch != 2000.]
     OUTPUT:
        Array indices into cat of xcat entries: index[0] is cat index of xcat[0]
     HISTORY:
        2016-09-12 - Written - Bovy (UofT)
+       2018-05-04 - Account for non-zero epoch difference - Bovy (UofT)
     """
-    iis= numpy.arange(len(cat))
-    RAf= cat[colRA].astype('float') # necessary if not float, like for GALAH
-    mai= [iis[RAf == xcat[ii]['RA']][0] for ii in range(len(xcat))]
-    return mai
+    if selection != 'all': selection= 'best'
+    if selection == 'all':
+        raise NotImplementedError("selection='all' CDS cross-match not currently implemented")
+    if 'ref_epoch' in cat.dtype.fields and numpy.fabs(epoch-2015.) > 0.01:
+        warnings.warn("You appear to be using a Gaia catalog, but are not setting the epoch to 2015., which may lead to incorrect matches")
+    depoch= epoch-2000.
+    if depoch != 0.:
+        # Use proper motion to get both catalogs at the same time
+        dra=cat[colpmRA]/numpy.cos(cat[colDec]/180.*numpy.pi)\
+            /3600000.*depoch
+        ddec= cat[colpmDec]/3600000.*depoch
+    else:
+        dra= numpy.zeros(len(cat))
+        ddec= numpy.zeros(len(cat))
+    # xmatch to v. small diff., because match is against *original* coords, 
+    # not matched coords in CDS
+    mc1= acoords.SkyCoord(cat[colRA]-dra,cat[colDec]-ddec,
+                          unit=(u.degree, u.degree),frame='icrs')
+    mc2= acoords.SkyCoord(xcat['RA'],xcat['DEC'],
+                          unit=(u.degree, u.degree),frame='icrs')
+    idx,d2d,d3d = mc2.match_to_catalog_sky(mc1)
+    mindx= d2d < 1e-5*u.arcsec
+    return idx[mindx]
