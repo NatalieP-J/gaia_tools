@@ -82,7 +82,7 @@ def apogee(xmatch=None,**kwargs):
         else:
             return data
     else:
-        kwargs['xmatch']= xmatch
+        #kwargs['xmatch']= xmatch
         return apread.allStar(**kwargs)
 
 def apogeerc(xmatch=None,**kwargs):
@@ -123,7 +123,7 @@ def apogeerc(xmatch=None,**kwargs):
         else:
             return data
     else:
-        kwargs['xmatch']= xmatch
+        #kwargs['xmatch']= xmatch
         return apread.rcsample(**kwargs)
   
 def gaiarv(dr=2):
