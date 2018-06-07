@@ -139,6 +139,7 @@ def cds(cat,xcat='vizier:I/345/gaia2',maxdist=2,colRA='RA',colDec='DEC',
                                'http://cdsxmatch.u-strasbg.fr/xmatch/api/v1/sync'],
                               stdout=result)
     except subprocess.CalledProcessError:
+        csvfile.close()
         os.remove(posfilename)
         if os.path.exists(resultfilename):
             result.close()
@@ -170,6 +171,7 @@ inner join tap_upload.my_table as m on m.source_id = g.source_id""",
         finally:
             os.remove(xmlfilename)
     # Remove temporary files
+    csvfile.close()
     os.remove(posfilename)
     if savefilename is None:
         os.remove(resultfilename)
