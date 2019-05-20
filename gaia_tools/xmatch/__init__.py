@@ -1,18 +1,24 @@
 # Tools for cross-matching catalogs
-import os, os.path
 import csv
+import sys
+import os
+import os.path
+import platform
 import shutil
+import subprocess
 import tempfile
 import warnings
-import subprocess
+
+WIN32= platform.system() == 'Windows'
 import numpy
 import astropy.coordinates as acoords
 from astropy.table import Table
 from astropy import units as u
 
+from ..load.download import _ERASESTR
 def xmatch(cat1,cat2,maxdist=2,
-           colRA1='RA',colDec1='DEC',epoch1=2000.,
-           colRA2='RA',colDec2='DEC',epoch2=2000.,
+           colRA1='RA',colDec1='DEC',epoch1=None,
+           colRA2='RA',colDec2='DEC',epoch2=None,
            colpmRA2='pmra',colpmDec2='pmdec',
            swap=False):
     """
@@ -41,12 +47,20 @@ def xmatch(cat1,cat2,maxdist=2,
        2016-09-12 - Written - Bovy (UofT)
        2016-09-21 - Account for Gaia epoch 2015 - Bovy (UofT)
     """
-    if ('ref_epoch' in cat1.dtype.fields and numpy.fabs(epoch1-2015.) > 0.01)\
-            or ('ref_epoch' in cat2.dtype.fields and \
-                    numpy.fabs(epoch2-2015.) > 0.01):
-        warnings.warn("You appear to be using a Gaia catalog, but are not setting the epoch to 2015., which may lead to incorrect matches")
+    if epoch1 is None:
+        if 'ref_epoch' in cat1.dtype.fields:
+            epoch1= cat1['ref_epoch']
+        else:
+            epoch1= 2000.
+    if epoch2 is None:
+        if 'ref_epoch' in cat2.dtype.fields:
+            epoch2= cat2['ref_epoch']
+        else:
+            epoch2= 2000.
+    _check_epoch(cat1,epoch1)
+    _check_epoch(cat2,epoch2)
     depoch= epoch2-epoch1
-    if depoch != 0.:
+    if numpy.any(depoch != 0.):
         # Use proper motion to get both catalogs at the same time
         dra=cat2[colpmRA2]/numpy.cos(cat2[colDec2]/180.*numpy.pi)\
             /3600000.*depoch
@@ -73,7 +87,7 @@ def xmatch(cat1,cat2,maxdist=2,
         return (m1,m2,d2d[mindx])
 
 def cds(cat,xcat='vizier:I/345/gaia2',maxdist=2,colRA='RA',colDec='DEC',
-        selection='best',epoch=2000.,colpmRA='pmra',colpmDec='pmdec',
+        selection='best',epoch=None,colpmRA='pmra',colpmDec='pmdec',
         savefilename=None,gaia_all_columns=False):
     """
     NAME:
@@ -100,10 +114,14 @@ def cds(cat,xcat='vizier:I/345/gaia2',maxdist=2,colRA='RA',colDec='DEC',
        2016-09-21 - Account for Gaia epoch 2015 - Bovy (UofT)
        2018-05-08 - Added gaia_all_columns - Bovy (UofT)
     """
-    if 'ref_epoch' in cat.dtype.fields and numpy.fabs(epoch-2015.) > 0.01:
-        warnings.warn("You appear to be using a Gaia catalog, but are not setting the epoch to 2015., which may lead to incorrect matches")
+    if epoch is None:
+        if 'ref_epoch' in cat.dtype.fields:
+            epoch= cat['ref_epoch']
+        else:
+            epoch= 2000.
+    _check_epoch(cat,epoch)
     depoch= epoch-2000.
-    if depoch != 0.:
+    if numpy.any(depoch != 0.):
         # Use proper motion to get both catalogs at the same time
         dra=cat[colpmRA]/numpy.cos(cat[colDec]/180.*numpy.pi)\
             /3600000.*depoch
@@ -123,27 +141,7 @@ def cds(cat,xcat='vizier:I/345/gaia2',maxdist=2,colRA='RA',colDec='DEC',
         for ii in range(len(cat)):
             wr.writerow([(cat[ii][colRA]-dra[ii]+360.) % 360.,
                           cat[ii][colDec]]-ddec[ii])
-    # Send to CDS for matching
-    result= open(resultfilename,'w')
-    try:
-        subprocess.check_call(['curl',
-                               '-X','POST',
-                               '-F','request=xmatch',
-                               '-F','distMaxArcsec=%i' % maxdist,
-                               '-F','selection=%s' % selection,
-                               '-F','RESPONSEFORMAT=csv',
-                               '-F','cat1=@%s' % os.path.basename(posfilename),
-                               '-F','colRA1=RA',
-                               '-F','colDec1=DEC',
-                               '-F','cat2=%s' % xcat,
-                               'http://cdsxmatch.u-strasbg.fr/xmatch/api/v1/sync'],
-                              stdout=result)
-    except subprocess.CalledProcessError:
-        os.remove(posfilename)
-        if os.path.exists(resultfilename):
-            result.close()
-            os.remove(resultfilename)
-    result.close()
+    _cds_match_batched(resultfilename,posfilename,maxdist,selection,xcat)
     # Directly match on input RA
     ma= cds_load(resultfilename)
     if gaia_all_columns:
@@ -179,14 +177,142 @@ inner join tap_upload.my_table as m on m.source_id = g.source_id""",
     mai= cds_matchback(cat,ma,colRA=colRA,colDec=colDec,epoch=epoch,
                        colpmRA=colpmRA,colpmDec=colpmDec)
     return (ma,mai)
+    
+def _cds_match_batched(resultfilename,posfilename,maxdist,selection,xcat,
+                       nruns_necessary=1):
+    """CDS xMatch (sometimes?) fails for large matches, because of a time-out,
+    so we recursively split until the batches are small enough to not fail"""
+    # Figure out which of the hierarchy we are running
+    try:
+        runs= ''.join([str(int(r)-1) 
+                       for r in posfilename.split('csv.')[-1].split('.')])
+    except ValueError:
+        runs= ''
+    nruns= 2**len(runs)
+    if nruns >= nruns_necessary: 
+        # Only run this level's match if we don't already know that we should
+        # be using smaller batches
+        _cds_basic_match(resultfilename,posfilename,maxdist,selection,xcat)
+        try:
+            ma= cds_load(resultfilename)
+        except ValueError: # Assume this is the time-out failure
+            pass
+        else:
+            return nruns
+    # xMatch failed because of time-out, split
+    posfilename1= posfilename+'.1'
+    posfilename2= posfilename+'.2'
+    resultfilename1= resultfilename+'.1'
+    resultfilename2= resultfilename+'.2'
+    # Figure out which of the hierarchy we are running
+    runs= ''.join([str(int(r)-1) 
+                   for r in posfilename1.split('csv.')[-1].split('.')])
+    nruns= 2**len(runs)
+    thisrun1= 1+int(runs,2)
+    thisrun2= 1+int(''.join([str(int(r)-1) 
+                   for r in posfilename2.split('csv.')[-1].split('.')]),2)
+    # Count the number of objects
+    with open(posfilename,'r') as posfile:
+        num_lines= sum(1 for line in posfile)
+    # Write the header line
+    with open(posfilename1,'w') as posfile1:
+        with open(posfilename,'r') as posfile:
+            posfile1.write(posfile.readline())
+    with open(posfilename2,'w') as posfile2:
+        with open(posfilename,'r') as posfile:
+            posfile2.write(posfile.readline())
+    # Cut in half
+    cnt= 0
+    with open(posfilename,'r') as posfile:
+        with open(posfilename1,'a') as posfile1:
+            with open(posfilename2,'a') as posfile2:
+                for line in posfile:
+                    if cnt == 0:
+                        cnt+= 1
+                        continue
+                    if cnt < num_lines//2:
+                        posfile1.write(line)
+                        cnt+= 1 # Can stop counting once this if is done
+                    else:
+                        posfile2.write(line)
+    # Run each
+    sys.stdout.write('\r'+"Working on CDS xMatch batch {} / {} ...\r"\
+                     .format(thisrun1,nruns))
+    sys.stdout.flush()      
+    nruns_necessary= _cds_match_batched(resultfilename1,posfilename1,
+                                        maxdist,selection,xcat,
+                                        nruns_necessary=nruns_necessary)
+    sys.stdout.write('\r'+"Working on CDS xMatch batch {} / {} ...\r"\
+                     .format(thisrun2,nruns))
+    sys.stdout.flush()
+    nruns_necessary= _cds_match_batched(resultfilename2,posfilename2,
+                                        maxdist,selection,xcat,
+                                        nruns_necessary=nruns_necessary)
+    sys.stdout.write('\r'+_ERASESTR+'\r')
+    sys.stdout.flush()        
+    # Combine results
+    with open(resultfilename,'w') as resultfile:
+        with open(resultfilename1,'r') as resultfile1:
+            for line in resultfile1:
+                resultfile.write(line)
+        with open(resultfilename2,'r') as resultfile2:
+            for line in resultfile2:
+                if line[0] == 'a': continue
+                resultfile.write(line)
+    # Remove intermediate files
+    os.remove(posfilename1)
+    os.remove(posfilename2)
+    os.remove(resultfilename1)
+    os.remove(resultfilename2)
+    return nruns_necessary
+
+def _cds_basic_match(resultfilename,posfilename,maxdist,selection,xcat):
+    # Send to CDS for matching
+    result= open(resultfilename,'w')
+    try:
+        subprocess.check_call(['curl',
+                               '-X','POST',
+                               '-F','request=xmatch',
+                               '-F','distMaxArcsec=%i' % maxdist,
+                               '-F','selection=%s' % selection,
+                               '-F','RESPONSEFORMAT=csv',
+                               '-F','cat1=@%s' % os.path.basename(posfilename),
+                               '-F','colRA1=RA',
+                               '-F','colDec1=DEC',
+                               '-F','cat2=%s' % xcat,
+                               'http://cdsxmatch.u-strasbg.fr/xmatch/api/v1/sync'],
+                              stdout=result)
+    except subprocess.CalledProcessError:
+        os.remove(posfilename)
+        if os.path.exists(resultfilename):
+            result.close()
+            os.remove(resultfilename)
+    result.close()
+    return None
 
 def cds_load(filename):
-    return numpy.genfromtxt(filename,delimiter=',',skip_header=0,
-                            filling_values=-9999.99,names=True,
-                            dtype='float128')
+    if WIN32:
+        # windows do not have float128, but source_id is double
+        # get around this by squeezing precision from int64 on source_id as source_id is always integer anyway
+        # first read everything as fp64 and then convert source_id to int64 will keep its precision
+        data = numpy.genfromtxt(filename, delimiter=',', skip_header=0,
+                                filling_values=-9999.99, names=True, max_rows=1,
+                                dtype='float64')  # only read the first row max to reduce workload to just get the column name
+        to_list = list(data.dtype.names)
+        # construct a list where everything is fp64 except 'source_id' being int64
+        dtype_list = [('{}'.format(i), numpy.float64) for i in to_list]
+        dtype_list[dtype_list.index(('source_id', numpy.float64))] = ('source_id', numpy.uint64)
+
+        return numpy.genfromtxt(filename, delimiter=',', skip_header=0,
+                                filling_values=-9999.99, names=True,
+                                dtype=dtype_list)
+    else:
+        return numpy.genfromtxt(filename, delimiter=',', skip_header=0,
+                                filling_values=-9999.99, names=True,
+                                dtype='float128')
 
 def cds_matchback(cat,xcat,colRA='RA',colDec='DEC',selection='best',
-                  epoch=2000.,colpmRA='pmra',colpmDec='pmdec',):
+                  epoch=None,colpmRA='pmra',colpmDec='pmdec',):
     """
     NAME:
        cds_matchback
@@ -210,10 +336,14 @@ def cds_matchback(cat,xcat,colRA='RA',colDec='DEC',selection='best',
     if selection != 'all': selection= 'best'
     if selection == 'all':
         raise NotImplementedError("selection='all' CDS cross-match not currently implemented")
-    if 'ref_epoch' in cat.dtype.fields and numpy.fabs(epoch-2015.) > 0.01:
-        warnings.warn("You appear to be using a Gaia catalog, but are not setting the epoch to 2015., which may lead to incorrect matches")
+    if epoch is None:
+        if 'ref_epoch' in cat.dtype.fields:
+            epoch= cat['ref_epoch']
+        else:
+            epoch= 2000.
+    _check_epoch(cat,epoch)
     depoch= epoch-2000.
-    if depoch != 0.:
+    if numpy.any(depoch != 0.):
         # Use proper motion to get both catalogs at the same time
         dra=cat[colpmRA]/numpy.cos(cat[colDec]/180.*numpy.pi)\
             /3600000.*depoch
@@ -230,3 +360,16 @@ def cds_matchback(cat,xcat,colRA='RA',colDec='DEC',selection='best',
     idx,d2d,d3d = mc2.match_to_catalog_sky(mc1)
     mindx= d2d < 1e-5*u.arcsec
     return idx[mindx]
+
+def _check_epoch(cat,epoch):
+    warn_about_epoch= False
+    if 'ref_epoch' in cat.dtype.fields:
+        if 'designation' not in cat.dtype.fields: # Assume this is DR1
+            if numpy.any(numpy.fabs(epoch-2015.) > 0.01):
+                warn_about_epoch= True
+        elif 'Gaia DR2' in cat['designation'][0].decode('utf-8'):
+            if numpy.any(numpy.fabs(epoch-2015.5) > 0.01):
+                warn_about_epoch= True
+    if warn_about_epoch:
+        warnings.warn("You appear to be using a Gaia catalog, but are not setting the epoch to 2015. (DR1) or 2015.5 (DR2), which may lead to incorrect matches")
+    return None
