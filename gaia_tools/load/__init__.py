@@ -452,27 +452,27 @@ def _elemIndx(elem,dr=14):
         raise KeyError("Element %s is not part of the APOGEE elements (can't do everything!) or something went wrong)" % elem)
 
 def _swap_in_astroNN(data,astroNNdata):
-    for tag,indx in zip(['TEFF','LOGG'],[0,1]):
-        data[tag]= astroNNdata['astroNN'][:,indx]
-        data[tag+'_ERR']= astroNNdata['astroNN_error'][:,indx]
+    for tag in ['TEFF','LOGG']:
+        data[tag]= astroNNdata[tag]
+        data[tag+'_ERR']= astroNNdata[tag+'_ERR']
     for tag,indx in zip(['C','CI','N','O','Na','Mg','Al','Si','P','S','K',
                          'Ca','Ti','TiII','V','Cr','Mn','Fe','Co','Ni'],
                         range(2,22)):
         data['X_H'][:,_elemIndx(tag.upper())]=\
-            astroNNdata['astroNN'][:,indx]
+            astroNNdata[tag.upper()+'_H']
         data['X_H_ERR'][:,_elemIndx(tag.upper())]=\
-            astroNNdata['astroNN_error'][:,indx]
+            astroNNdata[tag.upper()+'_H_ERR']
         if tag.upper() != 'FE':
             data['{}_FE'.format(tag.upper())]=\
-                astroNNdata['astroNN'][:,indx]-astroNNdata['astroNN'][:,19]
+                astroNNdata[tag.upper()+'_H']-astroNNdata['FE_H']
             data['{}_FE_ERR'.format(tag.upper())]=\
-                numpy.sqrt(astroNNdata['astroNN_error'][:,indx]**2.
-                           +astroNNdata['astroNN_error'][:,19]**2.)
+                numpy.sqrt(astroNNdata[tag.upper()+'_H_ERR']**2.
+                           +astroNNdata['FE_H_ERR']**2.)
         else:
             data['FE_H'.format(tag.upper())]=\
-                        astroNNdata['astroNN'][:,indx]
+                        astroNNdata['FE_H']
             data['FE_H_ERR'.format(tag.upper())]=\
-                astroNNdata['astroNN_error'][:,indx]
+                        astroNNdata['FE_H_ERR']
     return data
 
 def _add_astroNN_distances(data,astroNNDistancesdata):
